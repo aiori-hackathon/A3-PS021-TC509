@@ -1,0 +1,82 @@
+{
+  "project": "SENTRY-6G",
+  "scope": "mock adapters and simulated effects only",
+  "timestamp_utc": "20261031T181852Z",
+  "notes": [
+    "restart scenario is lost-ACK simulation; actual coordinator process restart must be demonstrated separately",
+    "submit_elapsed_ms is client-observed wall time, not network RTT or full recovery latency",
+    "VERIFIED_NOT_EXECUTED is absence from simulated executor ledger at query time"
+  ],
+  "baseline_effects": 4,
+  "final_effects": 8,
+  "new_effects": 4,
+  "expected_new_effects": 4,
+  "passed": true,
+  "scenarios": [
+    {
+      "scenario": "lost_ack",
+      "request_id": "JUDGE-25a321f07151",
+      "dialog_id": "D-395838d5f063",
+      "op_id": "OP-7f270078b8d9",
+      "initial_state": "UNCERTAIN",
+      "final_state": "COMPLETED",
+      "executor_evidence": "VERIFIED_DONE",
+      "submit_elapsed_ms": 17.38,
+      "deduplicated_retry": false,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "scenario": "duplicate",
+      "request_id": "JUDGE-fb9c3a10ce0c",
+      "dialog_id": "D-c73a2806134f",
+      "op_id": "OP-2793e3463e35",
+      "initial_state": "COMPLETED",
+      "final_state": "COMPLETED",
+      "executor_evidence": "VERIFIED_DONE",
+      "submit_elapsed_ms": 46.01,
+      "deduplicated_retry": true,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "scenario": "partition",
+      "request_id": "JUDGE-a5598f10c81b",
+      "dialog_id": "D-89403049fc36",
+      "op_id": "OP-01fa12d73393",
+      "initial_state": "UNCERTAIN",
+      "final_state": "UNCERTAIN",
+      "executor_evidence": "VERIFIED_NOT_EXECUTED",
+      "submit_elapsed_ms": 8.95,
+      "deduplicated_retry": false,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "scenario": "delay",
+      "request_id": "JUDGE-fb49421067fb",
+      "dialog_id": "D-371616291c46",
+      "op_id": "OP-5eb830b73b6a",
+      "initial_state": "COMPLETED",
+      "final_state": "COMPLETED",
+      "executor_evidence": "VERIFIED_DONE",
+      "submit_elapsed_ms": 393.76,
+      "deduplicated_retry": false,
+      "pass": true,
+      "errors": []
+    },
+    {
+      "scenario": "restart",
+      "request_id": "JUDGE-afda6f862851",
+      "dialog_id": "D-db2e93130a82",
+      "op_id": "OP-ec744b2fdd5e",
+      "initial_state": "UNCERTAIN",
+      "final_state": "COMPLETED",
+      "executor_evidence": "VERIFIED_DONE",
+      "submit_elapsed_ms": 38.14,
+      "deduplicated_retry": false,
+      "pass": true,
+      "errors": []
+    }
+  ]
+}
