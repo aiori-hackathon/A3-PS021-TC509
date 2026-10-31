@@ -1,95 +1,211 @@
-# SENTRY-6G — AIORI-3 / PS-021
+# SENTRY-6G
 
-**Experimental mock-adapter system** for dialog correlation, durable recovery, and executor-side idempotency. This package is a runnable prototype, not a production 6G deployment.
+**AIORI-3 · PS-021 — Experimental Dialog Correlation and Recovery Across Agent Adapters**
 
-## Quick start (Windows PowerShell / Linux / macOS)
+SENTRY-6G is a runnable prototype for tracking operations across two mock agent adapters and recovering safely when acknowledgements or connections fail. It maintains a consistent dialog identity, records lifecycle changes, checks executor-side evidence, and prevents duplicate simulated effects when the same operation is delivered more than once.
 
-Requires Python 3.10+ (tested on Python 3.10.11).
+The system uses local HTTP services, FastAPI, and SQLite. It demonstrates recovery behaviour under controlled fault simulations; it does not communicate with a real 6G network or modify production network equipment.
+
+## What the prototype does
+
+- Assigns a persistent dialog ID and links the requester's ID, executor-side ID, and operation ID.
+- Tracks explicit dialog states: `CREATED`, `DISPATCHED`, `UNCERTAIN`, `COMPLETED`, and `ESCALATED`.
+- Records dialog transitions and evidence checks in a SQLite event journal.
+- Uses executor-side idempotency to avoid applying the same simulated operation twice.
+- Reconciles uncertain outcomes against the executor's independent effect ledger rather than blindly repeating the operation.
+- Provides a browser dashboard, HTTP APIs, automated tests, and a repeatable five-scenario demonstration.
+
+## Architecture
+
+The prototype consists of three local HTTP services:
+
+**Requester — Adapter A (`localhost:8000`)**  
+Accepts an operation request and forwards it to the coordinator through `POST /delegate`.
+
+**Coordinator (`localhost:8001`)**  
+Creates and tracks dialogs, records state transitions, and performs evidence-based recovery. It also serves the dashboard and the main inspection APIs.
+
+**Executor — Adapter B (`localhost:8002`)**  
+Applies simulated operations and stores their results in an independent SQLite ledger. The effect record also acts as the idempotency record, and both are handled within the same database transaction.
+
+```text
+Requester (8000)  --->  Coordinator (8001)  --->  Executor (8002)
+                             |                         |
+                       Dialog journal             Effect ledger
+                         (SQLite)                   (SQLite)
+                             |                         |
+                             +---- Evidence query <----+
+```
+
+The coordinator stores `data/coordinator.db`; the executor stores `data/executor.db`. Database files are created locally when the services start and should not be committed to the repository.
+
+### Recovery decisions
+
+- **`VERIFIED_DONE`** — The executor ledger contains the operation. The coordinator can mark the dialog `COMPLETED`.
+- **`VERIFIED_NOT_EXECUTED`** — No matching operation is present in the simulated executor ledger at the time of the query. The current implementation does not automatically dispatch the operation again or mark the dialog completed.
+- **`UNKNOWN`** — The coordinator cannot establish the outcome, such as when the executor is unreachable. The dialog remains uncertain until further evidence is available.
+
+The executor ledger is authoritative only for the simulated operations in this prototype. Ledger absence is not proof that an arbitrary external action never happened.
+
+## Requirements
+
+- Python **3.10 or newer** (locally tested with Python 3.10.11)
+- Windows PowerShell, Linux, or macOS
+- Three available local ports: **8000**, **8001**, and **8002**
+
+The project does not require Node.js, Docker, or an external database server.
+
+## Installation
+
+Clone the official repository and open the application directory:
+
+```bash
+git clone https://github.com/aiori-hackathon/A3-PS021-TC509.git
+cd A3-PS021-TC509/SENTRY-6G
+```
+
+**Windows PowerShell**
 
 ```powershell
 py -3.10 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-On Linux/macOS activate with `source .venv/bin/activate`.
+**Linux / macOS**
 
-Start **three separate terminals** from the project directory:
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+If Python 3.10 is unavailable, use another installed supported Python version to create the environment.
+
+## Running the system
+
+Open three terminals in the `SENTRY-6G` directory. Start the services in this order:
+
+**Terminal 1 — Executor**
 
 ```powershell
-# Terminal 1 — executor :8002
 .\.venv\Scripts\python.exe service.py executor
-# Terminal 2 — coordinator and dashboard :8001
+```
+
+**Terminal 2 — Coordinator and dashboard**
+
+```powershell
 .\.venv\Scripts\python.exe service.py coordinator
-# Terminal 3 — requester :8000
+```
+
+**Terminal 3 — Requester**
+
+```powershell
 .\.venv\Scripts\python.exe service.py requester
 ```
 
-Linux/macOS: use `.venv/bin/python` instead of `.\.venv\Scripts\python.exe`.
+On Linux/macOS, replace `.\.venv\Scripts\python.exe` with `.venv/bin/python`.
 
-Open **http://127.0.0.1:8001** for the live dashboard. API docs at `http://127.0.0.1:8001/docs` and `http://127.0.0.1:8002/docs`.
+Open the dashboard at **http://127.0.0.1:8001/**. Interactive API documentation is available at `http://127.0.0.1:8000/docs`, `http://127.0.0.1:8001/docs`, and `http://127.0.0.1:8002/docs`.
 
-Run the 11 automated tests:
+These are **local addresses**, not public live-demo links.
+
+## Fault scenarios
+
+The dashboard and demo script support five controlled scenarios:
+
+1. **Lost acknowledgement (`lost_ack`)** — The executor commits the simulated operation, but the acknowledgement is treated as lost. The coordinator initially records `UNCERTAIN`; recovery checks the executor ledger and resolves the dialog to `COMPLETED`.
+2. **Duplicate delivery (`duplicate`)** — The same operation is submitted twice to the executor. The second attempt is identified as a duplicate, and only one effect record is created.
+3. **Partition before dispatch (`partition`)** — The coordinator simulates an interruption before sending the operation. The dialog becomes `UNCERTAIN`. A subsequent ledger check returns `VERIFIED_NOT_EXECUTED`, but the coordinator does not automatically retry or complete the dialog.
+4. **Delayed response (`delay`)** — The coordinator introduces a configurable delay before dispatch. The operation can still complete normally.
+5. **Restart-related uncertainty (`restart`)** — The automated scenario models a lost acknowledgement and subsequent recovery. **It does not restart a running process.** Actual restart persistence can be demonstrated manually by restarting the coordinator and checking the retained dialog records.
+
+These faults are injected in application logic. They are not measurements from a real impaired wireless network.
+
+## Tests and reproducible demo
+
+With the environment installed, run the automated tests from the application directory:
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest -v
 ```
 
-## Five reproducible scenarios
-
-1. **Lost ACK after commit**: select `lost_ack`, run, then Recover. Expect `UNCERTAIN -> COMPLETED`, one effect.
-2. **Duplicate request**: select `duplicate` using a new requester ID. Expect `duplicate_retry: true`, one effect.
-3. **Partition before dispatch**: select `partition`, run, then Recover. Expect `UNKNOWN`, then `VERIFIED_NOT_EXECUTED` (no effect). The system deliberately does not automatically dispatch the operation after the partition.
-4. **Coordinator restart**: select `restart`, run, stop and restart `python service.py coordinator`, then recover the dialog via `POST /recover/{dialog_id}` or dashboard (the dashboard's in-memory last-dialog selection resets on refresh). Expect persisted ID and one effect.
-5. **Delay / reconnection**: select `delay` with RTT 350ms, run; alternatively stop executor, submit, restart executor, then recover. Expect UNKNOWN while unavailable; recovery may report NOT_EXECUTED.
-
-**Important:** A `VERIFIED_NOT_EXECUTED` classification means absent from the *simulated executor ledger* at query time, not a general proof that arbitrary external operations did not occur. The executor stores the simulated effect and idempotency record in the same SQLite transaction. Real network commands require stronger transactional/reconciliation contracts.
-
-## API examples
-
-```bash
-curl -X POST http://127.0.0.1:8000/delegate -H "Content-Type: application/json" -d '{"a_id":"A-42","command":"QoS=high","fault":"lost_ack"}'
-curl http://127.0.0.1:8001/dialogs
-curl http://127.0.0.1:8001/events
-curl http://127.0.0.1:8001/network-policy?rtt_ms=250\&loss_pct=15
-```
-
-## Components
-
-- `service.py requester` — independent mock Adapter A HTTP service, port 8000
-- `service.py coordinator` — dialog FSM, SQLite journal, evidence gate, API, dashboard, port 8001
-- `service.py executor` — mock Adapter B, authoritative effect ledger and deduplication, port 8002
-- `core.py` — persistent SQLite model, transactionally atomic simulated effects
-- `web/index.html` — no-build, offline-capable dashboard
-- `tests/` — automated unit/concurrency tests
-
-## Scope and limits
-
-This is **not MCP/A2A interoperability**, **not a final IETF protocol**, and **not exactly-once delivery**. It is an experimental schema and mock adapter prototype. Network policy is a heuristic API, not an empirically validated adaptive scheduler. No B2 baseline comparison is included yet; do not claim performance superiority. The dashboard uses plain JavaScript rather than React to avoid a Node build dependency. There is no Docker configuration in this release. Do not connect this code to production routers or expose its unauthenticated APIs publicly.
-
-## Evidence from local testing (2026-10-31)
-
-The team reported 11/11 passing pytest checks and a five-scenario judge-demo PASS. The judge-demo reported executor ledger delta 4 (expected 4). These are **local mock-system observations**, not an independently validated 6G-network benchmark. The generated reports should be committed after reviewing for sensitive information. `reports/` is ignored by default; selectively force-add sanitized reports with `git add -f reports/<filename>`.
-
-## GitHub submission
-
-Create a private repository named for your team. Follow the official PS-021 PDF instructions regarding the `aiori-hackathon` collaborator and ownership transfer; verify the recipient and implications before transferring ownership. Include the proposal PDF, README, code, test evidence and mentor demonstration pseudocode. Do not commit `data/*.db` or credentials.
-
-## Fast judge demo and evidence export
-
-With executor (8002) and coordinator (8001) running in separate terminals (requester on 8000 for the full three-service demo):
+For the five-scenario demo, start the executor and coordinator first, then run:
 
 ```powershell
 .\.venv\Scripts\python.exe judge_demo.py
 ```
 
-This executes five distinct simulated fault cases against the running local services, checks executor evidence, and writes timestamped JSON and Markdown reports into `reports/`. The test checks the **change in executor effect count** across the run; it does not assert universal exactly-once semantics. A real coordinator restart is a **separate manual demonstration**, not part of this script. Run the automated tests with `python -m pytest -v`.
+On Linux/macOS, use `.venv/bin/python` in both commands.
 
-### 90-second judge presentation
+The demo submits a fresh request for each scenario, checks the final dialog state and executor evidence, and compares the change in the executor's effect count with the expected count. It writes timestamped **JSON** and **Markdown** reports to `reports/`.
 
-1. Open the local dashboard at `http://127.0.0.1:8001`; explain three roles and separate SQLite journals.
-2. Run `judge_demo.py` and show five scenario verdicts and the executor effect-count delta.
-3. Open the generated Markdown report, explain UNKNOWN vs VERIFIED_DONE vs VERIFIED_NOT_EXECUTED.
-4. Show duplicate retry and the executor ledger; explain the safety limit on uncertain outcomes.
-5. For actual restart persistence, stop and restart only the coordinator service, then show the same dialog IDs and records.
+**Local validation (31 October 2026):** The team observed **11/11 passing automated tests** and **five passing demo scenarios**. In that demo run, the executor ledger increased by **4 effects**, matching the expected four executed operations; the partition scenario produced no effect. These results describe the local mock environment and should not be interpreted as 6G-network performance measurements.
 
-**Submission:** Push source and tests to a private GitHub repository, add the official proposal and a demo recording or an accessible live demonstration link, and follow the event's collaborator/ownership instructions. Do not publish `.venv`, local SQLite data, secrets, or claim the localhost URL is publicly accessible.
+### Checking persistence across an actual coordinator restart
+
+1. Start all three services and create a dialog through the dashboard.
+2. Note its `dialog_id` and current state.
+3. Stop **only** the coordinator service (`Ctrl+C` in its terminal).
+4. Restart it with `service.py coordinator`.
+5. Open `http://127.0.0.1:8001/dialogs` and verify that the dialog ID and recorded state are retained.
+6. For an uncertain dialog, call `POST /recover/{dialog_id}` or use the dashboard's recovery action to query executor evidence.
+
+The coordinator's SQLite journal survives the process restart. The dashboard's last-selected dialog is browser state and may need to be selected again.
+
+## API reference
+
+**Requester — port 8000**
+
+- `POST /delegate` — Forward a request to the coordinator.
+- `GET /health` — Check requester health.
+
+**Coordinator — port 8001**
+
+- `POST /submit` — Create or reuse a dialog and process an operation.
+- `POST /recover/{dialog_id}` — Reconcile a dialog using executor evidence.
+- `GET /dialogs` — List recorded dialogs.
+- `GET /events` — Inspect recent journal events.
+- `GET /stats` — View dialog counts and, when available, executor effect counts.
+- `GET /audit/{op_id}` — Retrieve executor evidence for an operation.
+- `GET /executor-health` — Check executor connectivity.
+- `GET /network-policy` — Return an experimental waiting-time recommendation.
+- `GET /` — Open the dashboard.
+
+**Executor — port 8002**
+
+- `POST /execute` — Apply or deduplicate a simulated operation.
+- `GET /status/{op_id}` — Return executor-side evidence.
+- `GET /effects` — Return the number of stored simulated effects.
+
+Example request using PowerShell:
+
+```powershell
+$body = @{ a_id = 'demo-001'; command = 'QoS=high'; fault = 'lost_ack' } | ConvertTo-Json
+Invoke-RestMethod -Uri 'http://127.0.0.1:8000/delegate' -Method Post -ContentType 'application/json' -Body $body
+```
+
+The `a_id` identifies a requester operation. Reusing the same `a_id` with a different command is rejected; use a fresh ID for each independent demo request.
+
+## Repository layout
+
+```text
+SENTRY-6G/
+├── core.py                  SQLite persistence, dialog states, and effect ledger
+├── service.py               Requester, coordinator, and executor services
+├── judge_demo.py            Five-scenario local validation and report export
+├── requirements.txt         Python dependencies
+├── web/
+│   └── index.html           Browser dashboard
+└── tests/
+    ├── test_core.py         Persistence, state, and idempotency tests
+    └── test_api_metrics.py  API and metrics tests
+```
+
+Runtime SQLite files are stored under `data/`; generated demo reports are stored under `reports/`.
+
+## Implementation boundaries
+
+SENTRY-6G is an experimental adapter and recovery prototype, not a complete MCP/A2A interoperability implementation or a final IETF protocol implementation. It does not guarantee exactly-once delivery across arbitrary external systems. Its duplicate-effect protection applies to the simulated executor's transactional SQLite ledger.
+
+The `network-policy` endpoint provides a heuristic waiting-time suggestion; it is not a trained or empirically validated adaptive scheduler. The current evaluation does not include a comparative baseline or performance claims against alternative recovery systems. APIs are intended for local demonstration and have no production authentication or deployment hardening.
+
+The project illustrates how persistent identity, explicit uncertainty, and executor-side evidence can support safer recovery decisions across independent mock adapters.
